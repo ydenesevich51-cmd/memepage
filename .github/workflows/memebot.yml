@@ -1,0 +1,76 @@
+name: memebot
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # every 6 hours (UTC). Edit to change how often it runs.
+  workflow_dispatch:         # lets you press "Run workflow" by hand
+    inputs:
+      action:
+        description: "check = test your setup | run = make a new meme (posts it too if MODE is auto) | approve = post the oldest waiting meme"
+        type: choice
+        options: [check, run, approve]
+        default: check
+
+permissions:
+  contents: write            # lets the bot save images and its memory to your repo
+  models: read               # lets the bot use GitHub's free AI models
+
+concurrency:
+  group: memebot             # never run two copies at once
+
+jobs:
+  memebot:
+    # Scheduled runs only happen once you set MODE=auto. Until then, only your manual button presses.
+    if: github.event_name != 'schedule' || vars.MODE == 'auto'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # built in, nothing to set up
+      MODELS_TOKEN: ${{ secrets.MODELS_TOKEN }}   # optional backup, see README
+      LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+      GH_MODELS: ${{ vars.GH_MODELS }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # optional (paid)
+      IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}               # optional, Bluesky only
+      BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}   # optional, Bluesky only
+      NICHE: ${{ vars.NICHE }}
+      VOICE: ${{ vars.VOICE }}
+      PLATFORMS: ${{ vars.PLATFORMS }}
+      WATERMARK: ${{ vars.WATERMARK }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Test your setup
+        if: github.event.inputs.action == 'check'
+        run: python memebot.py check
+
+      - name: Write a new meme into queue/
+        if: github.event.inputs.action != 'approve' && github.event.inputs.action != 'check'
+        run: python memebot.py
+
+      - name: Save queue (Instagram needs the image to be public first)
+        if: github.event.inputs.action != 'check'
+        run: |
+          git config user.name memebot
+          git config user.email memebot@users.noreply.github.com
+          git add -A
+          git commit -m "memebot: queue" || echo "nothing to commit"
+          git pull --rebase
+          git push
+
+      - name: Post to your platform(s)
+        if: github.event.inputs.action == 'approve' || (github.event.inputs.action != 'check' && vars.MODE == 'auto')
+        run: python memebot.py approve
+
+      - name: Clean up (also saves progress if a post failed)
+        if: always() && github.event.inputs.action != 'check'
+        run: |
+          git add -A
+          git commit -m "memebot: posted" || echo "nothing to commit"
+          git pull --rebase
+          git push
